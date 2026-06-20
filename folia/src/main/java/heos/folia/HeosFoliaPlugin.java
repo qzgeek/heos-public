@@ -4,6 +4,7 @@ import heos.folia.commands.FoliaAdminCommands;
 import heos.folia.commands.FoliaAuthCommands;
 import heos.folia.commands.FoliaBanCommands;
 import heos.folia.commands.FoliaBindCommands;
+import heos.folia.commands.FoliaBindUI;
 import heos.folia.commands.FoliaMigrationCommands;
 import heos.folia.event.FoliaAuthListener;
 import heos.folia.event.FoliaAuthService;
@@ -62,7 +63,9 @@ public final class HeosFoliaPlugin extends JavaPlugin {
         new heos.folia.utils.FoliaBanCleanupService(this, banData);
 
         FoliaMigrationCommands migrationCommands = new FoliaMigrationCommands(this, storage, banData, nameResolver);
-        FoliaBindCommands bindCommands = new FoliaBindCommands(accountBinding, storage);
+        FoliaBindUI bindUI = new FoliaBindUI(storage, this);
+        getServer().getPluginManager().registerEvents(bindUI, this);
+        FoliaBindCommands bindCommands = new FoliaBindCommands(accountBinding, storage, bindUI);
         FoliaAdminCommands adminCommands = new FoliaAdminCommands(this, storage, whitelistData,
                 migrationCommands, authService, banCommands, bindCommands);
 

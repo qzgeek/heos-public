@@ -18,10 +18,12 @@ import java.util.List;
 public final class FoliaBindCommands implements CommandExecutor, TabCompleter {
     private final FoliaAccountBinding binding;
     private final FoliaStorage storage;
+    private final FoliaBindUI bindUI;
 
-    public FoliaBindCommands(FoliaAccountBinding binding, FoliaStorage storage) {
+    public FoliaBindCommands(FoliaAccountBinding binding, FoliaStorage storage, FoliaBindUI bindUI) {
         this.binding = binding;
         this.storage = storage;
+        this.bindUI = bindUI;
     }
 
     @Override
@@ -37,6 +39,8 @@ public final class FoliaBindCommands implements CommandExecutor, TabCompleter {
             case "accept"  -> accept(player, args);
             case "deny"    -> deny(player, args);
             case "status"  -> status(player);
+            case "manage"  -> bindUI.showChatMenu(player);
+            case "gui"     -> bindUI.showChestGui(player);
             case "list"    -> list(sender);
             case "revoke"  -> revoke(sender, args);
             default -> showHelp(player);
@@ -142,7 +146,7 @@ public final class FoliaBindCommands implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             String p = args[0].toLowerCase();
             List<String> r = new ArrayList<>();
-            for (String s : List.of("request", "accept", "deny", "status", "list", "revoke"))
+            for (String s : List.of("request", "accept", "deny", "status", "manage", "gui", "list", "revoke"))
                 if (s.startsWith(p)) r.add(s);
             return r;
         }
