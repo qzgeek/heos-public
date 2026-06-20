@@ -3,7 +3,7 @@ plugins {
     id("com.gradleup.shadow") version "8.3.5" apply false
 }
 
-group = "heos"
+group = "luoos"
 
 val modMetadata = loadHeosmodMetadata(rootProject.file("src/main/java/heos/Heosmod.java"))
 val modId = modMetadata.getValue("MOD_ID")
