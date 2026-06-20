@@ -47,6 +47,15 @@ maxPasswordLength: 32
 # Whether to enable the account binding system (/heos bind ...).
 enableAccountBinding: true
 
+# Storage backend for binding data: "sqlite" (default) or "mysql".
+bindingStorage: sqlite
+
+# MySQL connection (only used when bindingStorage is "mysql").
+#mysql:
+#  url: jdbc:mysql://localhost:3306/heos
+#  user: heos
+#  password: changeme
+
 # --- TPS Display ---
 # Whether to show TPS in the player list footer.
 enableAutoLogTps: true

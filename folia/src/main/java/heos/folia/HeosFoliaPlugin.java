@@ -28,150 +28,105 @@ public final class HeosFoliaPlugin extends JavaPlugin {
     private FoliaNameResolver nameResolver;
     private FoliaTpsDisplayService tpsDisplayService;
     private FoliaRecipeSyncService recipeSyncService;
-    private FoliaLoginUsernameValidationBypassService usernameValidationBypassService;
+    private FoliaLoginUsernameValidationBypassService bypassService;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
 
-        // Initialize messages (language files)
         heos.folia.utils.FoliaMessages.init(this);
         heos.folia.utils.FoliaLogFilterService.installConfiguredFilters(this);
 
-        // Initialize storage and data layers
+        // Storage with optional MySQL
         this.storage = new FoliaStorage(getDataFolder().toPath());
+        String bindingStorage = getConfig().getString("bindingStorage", "sqlite");
+        if ("mysql".equalsIgnoreCase(bindingStorage)) {
+            String url = getConfig().getString("mysql.url", "");
+            String user = getConfig().getString("mysql.user", "");
+            String pass = getConfig().getString("mysql.password", "");
+            if (!url.isEmpty()) {
+                storage.configureMySQL(url, user, pass);
+                getLogger().info("Account binding storage: MySQL");
+            }
+        }
         storage.initialize();
+
         this.banData = FoliaBanData.load(getDataFolder().toPath(), getLogger());
         this.whitelistData = FoliaWhitelistData.load(getDataFolder().toPath(), getLogger());
-
-        // Name resolver (conflict detection)
         this.nameResolver = new FoliaNameResolver(storage);
-
-        // Account binding
         this.accountBinding = new FoliaAccountBinding(storage, getLogger());
-
-        // TPS display
         this.tpsDisplayService = new FoliaTpsDisplayService(this);
-
-        // Auth service (UUID-based)
         this.authService = new FoliaAuthService(this, storage, nameResolver, accountBinding, tpsDisplayService);
 
-        // Ban commands (with name resolution)
         FoliaBanCommands banCommands = new FoliaBanCommands(banData, nameResolver);
         new heos.folia.utils.FoliaBanCleanupService(this, banData);
 
-        // Migration commands
         FoliaMigrationCommands migrationCommands = new FoliaMigrationCommands(this, storage, banData, nameResolver);
+        FoliaBindCommands bindCommands = new FoliaBindCommands(accountBinding, storage);
+        FoliaAdminCommands adminCommands = new FoliaAdminCommands(this, storage, whitelistData,
+                migrationCommands, authService, banCommands, bindCommands);
 
-        // Bind commands
-        FoliaBindCommands bindCommands = new FoliaBindCommands(accountBinding, nameResolver, storage);
-
-        // Admin commands (routing hub)
-        FoliaAdminCommands adminCommands = new FoliaAdminCommands(this, storage, whitelistData, migrationCommands, authService, banCommands, bindCommands);
-
-        // Command interceptor
-        getServer().getPluginManager().registerEvents(new FoliaCommandInterceptor(this, authService, banCommands), this);
-
-        // Auth listener
-        getServer().getPluginManager().registerEvents(new FoliaAuthListener(this, authService, banData, whitelistData), this);
-
-        // Register commands
+        getServer().getPluginManager().registerEvents(
+                new FoliaCommandInterceptor(this, authService, banCommands), this);
+        getServer().getPluginManager().registerEvents(
+                new FoliaAuthListener(this, authService, banData, whitelistData), this);
         registerCommands(banCommands, adminCommands);
 
-        // Recipe viewer sync (1.21.2+)
-        boolean recipeViewerSyncEnabled = isRecipeViewerSyncEnabled();
-        if (recipeViewerSyncEnabled) {
+        if (isRecipeViewerSyncEnabled()) {
             this.recipeSyncService = new FoliaRecipeSyncService(this);
         }
 
-        // Login bypass (Netty hook for UUID remapping + character restriction removal)
-        this.usernameValidationBypassService = new FoliaLoginUsernameValidationBypassService(
+        this.bypassService = new FoliaLoginUsernameValidationBypassService(
                 this, banData, whitelistData, accountBinding);
-        usernameValidationBypassService.install();
+        bypassService.install();
 
-        getLogger().info("Heos Folia support enabled (UUID-based + Account Binding)");
+        getLogger().info("Heos Folia enabled (UUID-based + Account Binding + Group Concurrency)");
         getLogger().info("Account binding: " + getConfig().getBoolean("enableAccountBinding", true));
-        getLogger().info("Unprefixed command hijack: " + getConfig().getBoolean("enableUnprefixedCommandHijack", true));
-        getLogger().info("Authentication: " + getConfig().getBoolean("enableAuthentication", true)
-                + ", TPS footer: " + getConfig().getBoolean("enableAutoLogTps", true));
-        getLogger().info("Offline players: " + (getConfig().getBoolean("allowOfflinePlayers", true) ? "Enabled" : "Disabled"));
-        getLogger().info("Recipe viewer sync: " + recipeViewerSyncEnabled);
+        getLogger().info("Binding storage: " + bindingStorage);
+        getLogger().info("Auth: " + getConfig().getBoolean("enableAuthentication", true)
+                + ", TPS: " + getConfig().getBoolean("enableAutoLogTps", true));
+        getLogger().info("Offline: " + (getConfig().getBoolean("allowOfflinePlayers", true) ? "Enabled" : "Disabled"));
     }
 
     @Override
     public void onDisable() {
-        if (authService != null) {
-            authService.close();
-        }
-        if (tpsDisplayService != null) {
-            tpsDisplayService.close();
-        }
-        if (recipeSyncService != null) {
-            recipeSyncService.close();
-        }
-        if (usernameValidationBypassService != null) {
-            usernameValidationBypassService.close();
-        }
+        if (authService != null) authService.close();
+        if (tpsDisplayService != null) tpsDisplayService.close();
+        if (recipeSyncService != null) recipeSyncService.close();
+        if (bypassService != null) bypassService.close();
     }
 
     private void registerCommands(FoliaBanCommands banCommands, FoliaAdminCommands adminCommands) {
-        FoliaAuthCommands commands = new FoliaAuthCommands(authService);
-        bind("login", commands);
-        bind("register", commands);
-        bind("changepassword", commands);
-
-        bind("ban", banCommands);
-        bind("ban-ip", banCommands);
-        bind("unban", banCommands);
-        bind("unban-ip", banCommands);
-        bind("banlist", banCommands);
-
+        FoliaAuthCommands cmds = new FoliaAuthCommands(authService);
+        bind("login", cmds); bind("register", cmds); bind("changepassword", cmds);
+        bind("ban", banCommands); bind("ban-ip", banCommands);
+        bind("unban", banCommands); bind("unban-ip", banCommands); bind("banlist", banCommands);
         bind("heos", adminCommands);
     }
 
-    private void bind(String name, org.bukkit.command.CommandExecutor executor) {
-        PluginCommand command = getCommand(name);
-        if (command == null) {
-            getLogger().warning("Command is missing from plugin.yml: " + name);
-            return;
-        }
-        command.setExecutor(executor);
-        if (executor instanceof org.bukkit.command.TabCompleter completer) {
-            command.setTabCompleter(completer);
-        }
+    private void bind(String name, org.bukkit.command.CommandExecutor exec) {
+        PluginCommand cmd = getCommand(name);
+        if (cmd == null) { getLogger().warning("Missing command: " + name); return; }
+        cmd.setExecutor(exec);
+        if (exec instanceof org.bukkit.command.TabCompleter tc) cmd.setTabCompleter(tc);
     }
 
     private boolean isRecipeViewerSyncEnabled() {
         return getConfig().getBoolean("enableRecipeViewerSync", true)
-                && compareMinecraftVersions(minecraftVersion(), "1.21.2") >= 0;
+                && compareVersions(getServer().getBukkitVersion().split("-", 2)[0], "1.21.2") >= 0;
     }
 
-    private String minecraftVersion() {
-        return getServer().getBukkitVersion().split("-", 2)[0];
-    }
-
-    private static int compareMinecraftVersions(String left, String right) {
-        String[] leftParts = left.split("\\.");
-        String[] rightParts = right.split("\\.");
-        int size = Math.max(leftParts.length, rightParts.length);
-        for (int index = 0; index < size; index++) {
-            int leftPart = versionPart(leftParts, index);
-            int rightPart = versionPart(rightParts, index);
-            if (leftPart != rightPart) {
-                return Integer.compare(leftPart, rightPart);
-            }
+    private static int compareVersions(String a, String b) {
+        String[] ap = a.split("\\."), bp = b.split("\\.");
+        for (int i = 0; i < Math.max(ap.length, bp.length); i++) {
+            int av = i < ap.length ? tryParse(ap[i]) : 0;
+            int bv = i < bp.length ? tryParse(bp[i]) : 0;
+            if (av != bv) return Integer.compare(av, bv);
         }
         return 0;
     }
 
-    private static int versionPart(String[] parts, int index) {
-        if (index >= parts.length) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(parts[index]);
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
+    private static int tryParse(String s) {
+        try { return Integer.parseInt(s); } catch (NumberFormatException e) { return 0; }
     }
 }

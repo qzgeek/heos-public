@@ -1,13 +1,22 @@
 package heos.folia.storage;
 
 import heos.folia.utils.FoliaMessages;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.logging.Logger;
 
 /**
- * High-level account binding operations.
- * Delegates storage to FoliaStorage but adds validation logic.
+ * High-level account binding operations with validation.
+ *
+ * Binding rules:
+ *  - bound account → target account (many-to-one)
+ *  - One account can only bind to ONE target
+ *  - A target cannot itself be bound (no chains)
+ *  - Double-blind: target must specify bound name to accept
+ *  - Only one player per binding group can be online
  */
 public final class FoliaAccountBinding {
     private final FoliaStorage storage;
@@ -18,86 +27,89 @@ public final class FoliaAccountBinding {
         this.logger = logger;
     }
 
-    /**
-     * Request a binding from newPlayer (the one requesting) to oldPlayerName.
-     * Returns BindingEntry on success, null with message on failure.
-     */
-    public BindResult requestBinding(UUID newUuid, String newName, String oldName) {
-        if (oldName == null || oldName.isEmpty()) {
+    /** Request binding: boundPlayer wants to bind to targetPlayer. */
+    public BindResult requestBinding(UUID boundUuid, String boundName, String targetName) {
+        if (targetName == null || targetName.isEmpty())
             return BindResult.fail(FoliaMessages.bindOldNameRequired());
-        }
-        if (newName == null || newName.isEmpty()) {
+        if (boundName == null || boundName.isEmpty())
             return BindResult.fail("Invalid player name");
-        }
+        if (boundName.equalsIgnoreCase(targetName))
+            return BindResult.fail(FoliaMessages.bindSelfTarget());
 
-        // Check if new player already has a pending or active binding
-        java.util.List<FoliaStorage.BindingEntry> existing = storage.listAllBindings();
-        for (FoliaStorage.BindingEntry entry : existing) {
-            if (entry.newUuid.equals(newUuid) && "active".equals(entry.status)) {
-                return BindResult.fail(FoliaMessages.bindAlreadyBound());
-            }
-            if (entry.newUuid.equals(newUuid) && "pending".equals(entry.status)) {
+        // Check: bound player is not already bound to someone
+        if (storage.isBound(boundUuid))
+            return BindResult.fail(FoliaMessages.bindAlreadyBound());
+
+        // Check: bound player is not a target themselves
+        if (storage.isTarget(boundUuid))
+            return BindResult.fail(FoliaMessages.bindIsTarget());
+
+        // Check: no existing pending request from this bound player
+        List<FoliaStorage.BindingEntry> all = storage.listAllBindings();
+        for (FoliaStorage.BindingEntry e : all) {
+            if (e.isPending() && e.boundUuid.equals(boundUuid))
                 return BindResult.fail(FoliaMessages.bindPendingExists());
+        }
+
+        FoliaStorage.BindingEntry entry = storage.requestBinding(boundUuid, boundName, targetName);
+        if (entry == null) return BindResult.fail(FoliaMessages.bindRequestFailed());
+
+        logger.info("Binding requested: " + boundName + " → " + targetName);
+        return BindResult.ok(entry, FoliaMessages.bindRequestSent(targetName));
+    }
+
+    /** Accept binding: targetPlayer confirms by specifying the bound player's name. */
+    public BindResult acceptBinding(UUID targetUuid, String targetName, String boundName) {
+        if (boundName == null || boundName.isEmpty())
+            return BindResult.fail(FoliaMessages.bindNewNameRequired());
+
+        // Check: target is not already bound to someone else
+        if (storage.isBound(targetUuid))
+            return BindResult.fail(FoliaMessages.bindTargetIsBound());
+
+        FoliaStorage.BindingEntry entry = storage.acceptBinding(targetUuid, targetName, boundName);
+        if (entry == null) return BindResult.fail(FoliaMessages.bindNoPendingRequest(boundName));
+
+        logger.info("Binding accepted: " + entry.boundName + " → " + entry.targetName
+                + " (UUID: " + entry.boundUuid + " → " + entry.targetUuid + ")");
+        return BindResult.ok(entry, FoliaMessages.bindAccepted(boundName));
+    }
+
+    /** Check if anyone in the binding group of this UUID is currently online.
+     *  Returns the online player name if so, null otherwise. */
+    public String checkGroupOnline(UUID uuid) {
+        List<UUID> group = storage.getBindingGroup(uuid);
+        if (group.isEmpty()) return null;
+        for (UUID id : group) {
+            if (id.equals(uuid)) continue; // skip self
+            Player online = Bukkit.getPlayer(id);
+            if (online != null && online.isOnline()) {
+                return online.getName();
             }
         }
-
-        // Check if there's already a pending request for this old name from this new UUID
-        // deduplicate
-        FoliaStorage.BindingEntry entry = storage.requestBinding(newUuid, newName, oldName);
-        if (entry == null) {
-            return BindResult.fail(FoliaMessages.bindRequestFailed());
-        }
-        logger.info("Binding requested: " + newName + " -> " + oldName);
-        return BindResult.ok(entry, FoliaMessages.bindRequestSent(oldName));
+        return null;
     }
 
-    /**
-     * Accept a binding: oldPlayer confirms by specifying the new player's name.
-     */
-    public BindResult acceptBinding(UUID oldUuid, String oldName, String newName) {
-        if (newName == null || newName.isEmpty()) {
-            return BindResult.fail(FoliaMessages.bindNewNameRequired());
-        }
-
-        FoliaStorage.BindingEntry entry = storage.acceptBinding(oldUuid, oldName, newName);
-        if (entry == null) {
-            return BindResult.fail(FoliaMessages.bindNoPendingRequest(newName));
-        }
-        logger.info("Binding accepted: " + entry.oldName + " <- " + entry.newName + " (UUID: " + entry.oldUuid + " <- " + entry.newUuid + ")");
-        return BindResult.ok(entry, FoliaMessages.bindAccepted(newName));
+    /** Get the group UUIDs including this one, for full online check. */
+    public List<UUID> getBindingGroup(UUID uuid) {
+        return storage.getBindingGroup(uuid);
     }
 
-    /**
-     * Look up the effective UUID for a connecting player.
-     * If the player has an active binding, returns the old UUID.
-     * Otherwise returns the original UUID.
-     */
-    public UUID resolveEffectiveUuid(UUID rawUuid) {
-        UUID boundUuid = storage.getBoundUuid(rawUuid);
-        return boundUuid != null ? boundUuid : rawUuid;
+    /** Resolve effective UUID: if this UUID is bound, return the target UUID. */
+    public UUID resolveEffectiveUuid(UUID uuid) {
+        UUID target = storage.getTargetUuid(uuid);
+        return target != null ? target : uuid;
     }
 
-    public boolean isNewUuidBound(UUID uuid) {
-        return storage.getBoundUuid(uuid) != null;
-    }
+    // ==========
 
     public static final class BindResult {
         public final boolean success;
         public final String message;
         public final FoliaStorage.BindingEntry entry;
 
-        private BindResult(boolean success, String message, FoliaStorage.BindingEntry entry) {
-            this.success = success;
-            this.message = message;
-            this.entry = entry;
-        }
-
-        public static BindResult ok(FoliaStorage.BindingEntry entry, String message) {
-            return new BindResult(true, message, entry);
-        }
-
-        public static BindResult fail(String message) {
-            return new BindResult(false, message, null);
-        }
+        private BindResult(boolean s, String m, FoliaStorage.BindingEntry e) { success = s; message = m; entry = e; }
+        public static BindResult ok(FoliaStorage.BindingEntry e, String m) { return new BindResult(true, m, e); }
+        public static BindResult fail(String m) { return new BindResult(false, m, null); }
     }
 }

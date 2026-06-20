@@ -50,5 +50,9 @@
   "text.heos.bindInfo": "\u00a7f#%d \u00a7b%s \u00a77-> \u00a7b%s \u00a77[%s] \u00a78%s",
   "text.heos.bindHeader": "\u00a76=== 绑定列表 ===",
   "text.heos.nameAmbiguous": "\u00a7c'%s' 存在多个账号（正版/离线）。请使用 '正版_%s' 或 '离线_%s' 指定。",
-  "text.heos.nameAmbiguousHint": "\u00a7e此名字对应多个账号，请使用完整前缀名操作。"
+  "text.heos.nameAmbiguousHint": "\u00a7e此名字对应多个账号，请使用完整前缀名操作。",
+  "text.heos.bindSelfTarget": "\u00a7c不能绑定到自己！",
+  "text.heos.bindIsTarget": "\u00a7c你的账号已被其他账号绑定，不能再去绑定别人。",
+  "text.heos.bindTargetIsBound": "\u00a7c你已绑定到其他账号，不能作为被绑定目标。",
+  "text.heos.bindGroupOnline": "\u00a7c已有其他绑定账号在线！（%s）"
 }

@@ -279,6 +279,23 @@ public final class FoliaMessages {
         return translate("text.heos.nameAmbiguousHint");
     }
 
+    // === Additional binding messages ===
+    public static String bindSelfTarget() {
+        return translate("text.heos.bindSelfTarget");
+    }
+
+    public static String bindIsTarget() {
+        return translate("text.heos.bindIsTarget");
+    }
+
+    public static String bindTargetIsBound() {
+        return translate("text.heos.bindTargetIsBound");
+    }
+
+    public static String bindGroupOnline(String playerName) {
+        return translate("text.heos.bindGroupOnline").formatted(playerName);
+    }
+
     private static String allowedUsernamePattern() {
         if (plugin != null && plugin.getConfig().getBoolean("allowMoreOfflineUsernameCharacters", true)) {
             return translate("text.heos.usernamePatternExtended");
