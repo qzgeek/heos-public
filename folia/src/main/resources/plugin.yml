@@ -40,9 +40,8 @@ commands:
     usage: /banlist
     permission: luoos.admin
   los:
-    description: LuoOS administration
+    description: LuoOS administration and player commands
     usage: /los <login|register|changepassword|ban|ban-ip|unban|unban-ip|banlist|resetpassword|info|whitelist|migrate|reload|bind>
-    permission: luoos.admin
 permissions:
   luoos.admin:
     default: op

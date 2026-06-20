@@ -5,7 +5,7 @@ plugins {
 
 group = "luoos"
 
-val modMetadata = loadHeosmodMetadata(rootProject.file("src/main/java/heos/Heosmod.java"))
+val modMetadata = loadHeosmodMetadata(file("src/main/java/heos/Heosmod.java"))
 val modId = modMetadata.getValue("MOD_ID")
 val modName = modMetadata.getValue("MOD_NAME")
 val modVersion = modMetadata.getValue("MOD_VERSION")
@@ -16,7 +16,7 @@ val modHomepage = modMetadata.getValue("MOD_HOMEPAGE")
 version = modVersion
 
 val foliaSourceRoot = project.layout.projectDirectory.dir("src/main")
-val releaseJars = rootProject.layout.buildDirectory.dir("release-jars")
+val releaseJars = layout.buildDirectory.dir("release-jars")
 val supportedFoliaVersions = mapOf(
     "1.20.1" to "1.20-1.20.1",
     "1.20.2" to "1.20.2-1.20.3",
@@ -83,7 +83,7 @@ subprojects {
     }
 
     tasks.withType<ProcessResources>().configureEach {
-        from(rootProject.layout.projectDirectory.dir("src/main/resources/data")) {
+        from(project.layout.projectDirectory.dir("src/main/resources/data")) {
             into("data")
         }
         filesMatching("plugin.yml") {
