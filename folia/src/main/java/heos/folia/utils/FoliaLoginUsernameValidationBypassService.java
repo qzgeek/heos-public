@@ -8,7 +8,6 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPromise;
 import org.bukkit.plugin.Plugin;
 
 import java.lang.reflect.Field;
@@ -24,19 +23,22 @@ import java.util.UUID;
 import java.util.logging.Level;
 
 /**
- * Installs a Netty hook before Minecraft handles the login hello packet.
- * This service:
- * 1. Removes character restrictions for offline players (any valid-length name allowed)
- * 2. For standard Mojang usernames: lets Mojang verify first; if verification fails
- *    and allowOfflinePlayers is true, intercepts the kick and redirects to offline login
- * 3. Applies UUID remapping for bound accounts (account binding)
- * 4. Blocks banned/not-whitelisted players early
+ * Netty hook for login bypass.
+ *
+ * Strategy for offline players when allowOfflinePlayers=true:
+ *   1. Non-standard usernames (e.g. Chinese, special chars) → bypass immediately
+ *   2. Standard Mojang usernames → query Mojang API to check if name is premium
+ *      a) NOT_FOUND in Mojang → bypass with offline UUID (this name is free)
+ *      b) FOUND in Mojang   → let normal verification run (premium player)
+ *      c) API ERROR         → let normal flow proceed (degrade gracefully)
+ *
+ * This avoids needing to intercept Mojang verification failures, which are
+ * hard to catch on Folia due to internal disconnect handling.
  */
 public final class FoliaLoginUsernameValidationBypassService implements AutoCloseable {
     private static final String ACCEPTOR_HANDLER = "heos_login_acceptor";
     private static final String CHILD_BOOTSTRAP_HANDLER = "heos_login_child_bootstrap";
     private static final String PACKET_HANDLER = "heos_login_username_validation_bypass";
-    private static final String DISCONNECT_INTERCEPTOR = "heos_disconnect_interceptor";
     private static final String VANILLA_PACKET_HANDLER = "packet_handler";
 
     private final Plugin plugin;
@@ -44,10 +46,6 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
     private final FoliaWhitelistData whitelistData;
     private final FoliaAccountBinding accountBinding;
     private final Set<Channel> serverChannels = Collections.newSetFromMap(new IdentityHashMap<>());
-
-    // Track channels that should fall back to offline on Mojang failure
-    private static final io.netty.util.AttributeKey<Boolean> OFFLINE_FALLBACK_KEY =
-            io.netty.util.AttributeKey.valueOf("heos_offline_fallback");
 
     public FoliaLoginUsernameValidationBypassService(Plugin plugin, FoliaBanData banData,
                                                       FoliaWhitelistData whitelistData,
@@ -65,7 +63,7 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         if (serverChannels.isEmpty()) {
             plugin.getLogger().warning("No server channels found for login bypass; offline login may not work");
         }
-        plugin.getLogger().info("Installed Folia login bypass (UUID mapping + name restriction removal + Mojang failure fallback)");
+        plugin.getLogger().info("Installed Folia login bypass (premium-name detection via Mojang API)");
     }
 
     @Override
@@ -126,7 +124,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         }
         if (channel.pipeline().get(VANILLA_PACKET_HANDLER) == null) {
             if (attempts < 20) {
-                channel.eventLoop().schedule(() -> installChildChannel(channel, attempts + 1), 25L, java.util.concurrent.TimeUnit.MILLISECONDS);
+                channel.eventLoop().schedule(() -> installChildChannel(channel, attempts + 1),
+                        25L, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
             return;
         }
@@ -141,116 +140,39 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
                         return;
                     }
 
-                    // 1) Reject if banned or not whitelisted
+                    // 1) Reject banned / not-whitelisted
                     if (rejectHeosLogin(context.channel(), username)) {
                         return;
                     }
 
-                    // 2) Decide how to handle this player
+                    // 2) Decide: bypass or let Mojang verify?
                     boolean allowOffline = plugin.getConfig().getBoolean("allowOfflinePlayers", true);
                     boolean isStandardName = FoliaMojangApi.isValidMojangUsername(username);
 
                     if (allowOffline && !isStandardName) {
-                        // Non-standard name: definitely offline, bypass immediately
+                        // Non-standard name → definitely offline, bypass immediately
                         if (acceptOfflineLogin(context.channel(), username)) {
                             return;
                         }
                         enableValidationBypass(context.channel());
                     } else if (allowOffline && isStandardName) {
-                        // Standard name but allowOffline: let Mojang try first.
-                        // Install disconnect interceptor to catch Mojang auth failure.
-                        context.channel().attr(OFFLINE_FALLBACK_KEY).set(true);
-                        installDisconnectInterceptor(context.channel(), username);
-                        // Let the packet pass through to normal Mojang verification
+                        // Standard name → check Mojang API to see if this name is taken
+                        FoliaMojangApi.LookupResult mojang = FoliaMojangApi.lookupAccount(username);
+                        if (mojang.type == FoliaMojangApi.LookupResultType.NOT_FOUND) {
+                            // Name is free in Mojang → offline player, bypass
+                            plugin.getLogger().info("Offline player with standard name: " + username + " (not in Mojang)");
+                            if (acceptOfflineLogin(context.channel(), username)) {
+                                return;
+                            }
+                            enableValidationBypass(context.channel());
+                        }
+                        // else: FOUND or ERROR → let normal Mojang verification run
                     }
-                    // else: standard name, offline not allowed — normal flow
                 }
                 super.channelRead(context, message);
             }
         });
         removeHandler(channel, CHILD_BOOTSTRAP_HANDLER);
-    }
-
-    /**
-     * Install an interceptor on the channel's write path to catch login disconnects.
-     * When Mojang verification fails for an offline-fallback player, we abort the
-     * disconnect and force offline login instead.
-     */
-    private void installDisconnectInterceptor(Channel channel, String username) {
-        if (channel.pipeline().get(DISCONNECT_INTERCEPTOR) != null) {
-            return;
-        }
-        // Install AFTER the vanilla packet_handler to intercept outgoing packets
-        channel.pipeline().addAfter(VANILLA_PACKET_HANDLER, DISCONNECT_INTERCEPTOR, new ChannelDuplexHandler() {
-            @Override
-            public void write(ChannelHandlerContext context, Object msg, ChannelPromise promise) throws Exception {
-                // Check if this is a login disconnect packet
-                if (Boolean.TRUE.equals(context.channel().attr(OFFLINE_FALLBACK_KEY).get())
-                        && isLoginDisconnectPacket(msg)) {
-                    String reason = extractDisconnectReason(msg);
-                    if (reason != null && isMojangAuthFailure(reason)) {
-                        // Mojang verification failed — intercept and redirect to offline
-                        plugin.getLogger().info("Mojang auth failed for " + username + ", falling back to offline login");
-                        context.channel().attr(OFFLINE_FALLBACK_KEY).set(false);
-                        removeHandler(context.channel(), DISCONNECT_INTERCEPTOR);
-
-                        // Force offline login on this channel
-                        if (acceptOfflineLogin(context.channel(), username)) {
-                            promise.setSuccess(); // Suppress the disconnect
-                            return;
-                        }
-                        enableValidationBypass(context.channel());
-                        // Still let the disconnect through if acceptOfflineLogin failed
-                    }
-                }
-                super.write(context, msg, promise);
-            }
-        });
-    }
-
-    private boolean isLoginDisconnectPacket(Object packet) {
-        if (packet == null) return false;
-        String name = packet.getClass().getName();
-        // ClientboundLoginDisconnectPacket or ClientboundDisconnectPacket
-        return name.contains("DisconnectPacket") || name.contains("LoginDisconnect");
-    }
-
-    private String extractDisconnectReason(Object packet) {
-        try {
-            // Try getReason() method first
-            for (Method method : packet.getClass().getMethods()) {
-                if (method.getParameterCount() == 0 && method.getReturnType().getName().contains("Component")) {
-                    Object component = method.invoke(packet);
-                    if (component != null) {
-                        // Component.getString()
-                        Method getString = component.getClass().getMethod("getString");
-                        return (String) getString.invoke(component);
-                    }
-                }
-            }
-            // Try fields
-            for (Field field : packet.getClass().getDeclaredFields()) {
-                if (field.getType().getName().contains("Component")) {
-                    field.setAccessible(true);
-                    Object component = field.get(packet);
-                    if (component != null) {
-                        Method getString = component.getClass().getMethod("getString");
-                        return (String) getString.invoke(component);
-                    }
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
-
-    private boolean isMojangAuthFailure(String reason) {
-        if (reason == null) return false;
-        // Mojang's "Failed to verify username" message
-        return reason.contains("verify") || reason.contains("Verify")
-                || reason.contains("验证") || reason.contains("auth")
-                || reason.contains("session") || reason.contains("Session")
-                || reason.contains("Failed to verify");
     }
 
     private boolean rejectHeosLogin(Channel channel, String username) {
@@ -282,10 +204,12 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
     private boolean rejectBan(String username, Channel channel) {
         FoliaBanData.BanEntry playerBan = banData.getPlayerBan(username, null);
         if (playerBan != null) {
-            if (!plugin.getConfig().getBoolean("enableCustomBan", true) && !FoliaMessages.isMigrationReason(playerBan.reason)) {
+            if (!plugin.getConfig().getBoolean("enableCustomBan", true)
+                    && !FoliaMessages.isMigrationReason(playerBan.reason)) {
                 return false;
             }
-            return disconnectLogin(channel, FoliaMessages.banMessage(playerBan.reason, FoliaTimeParser.formatAbsolute(playerBan.expiryTime)));
+            return disconnectLogin(channel, FoliaMessages.banMessage(playerBan.reason,
+                    FoliaTimeParser.formatAbsolute(playerBan.expiryTime)));
         }
         if (!plugin.getConfig().getBoolean("enableCustomBan", true)) {
             return false;
@@ -294,7 +218,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         if (ipBan == null) {
             return false;
         }
-        return disconnectLogin(channel, FoliaMessages.banIpMessage(ipBan.reason, FoliaTimeParser.formatAbsolute(ipBan.expiryTime)));
+        return disconnectLogin(channel, FoliaMessages.banIpMessage(ipBan.reason,
+                FoliaTimeParser.formatAbsolute(ipBan.expiryTime)));
     }
 
     private boolean disconnectLogin(Channel channel, String message) {
@@ -319,17 +244,10 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
     }
 
     private static String channelIp(Channel channel) {
-        if (channel.remoteAddress() instanceof InetSocketAddress address && address.getAddress() != null) {
-            return address.getAddress().getHostAddress();
+        if (channel.remoteAddress() instanceof InetSocketAddress addr && addr.getAddress() != null) {
+            return addr.getAddress().getHostAddress();
         }
         return "";
-    }
-
-    private boolean shouldAcceptOfflineLogin(String username) {
-        if (!plugin.getConfig().getBoolean("allowOfflinePlayers", true)) {
-            return false;
-        }
-        return !FoliaMojangApi.isValidMojangUsername(username);
     }
 
     private boolean acceptOfflineLogin(Channel channel, String username) {
@@ -344,7 +262,7 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         try {
             UUID uuid = offlineUuid(username);
 
-            // Check for account binding
+            // Account binding remap
             if (plugin.getConfig().getBoolean("enableAccountBinding", true)) {
                 UUID boundUuid = accountBinding.resolveEffectiveUuid(uuid);
                 if (!boundUuid.equals(uuid)) {
@@ -361,15 +279,16 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
             setFieldIfPresent(listener, "requestedUsername", username);
             setFieldIfPresent(listener, "requestedUuid", uuid);
 
-            Method startVerification = findGameProfileMethod(listener.getClass(), "startClientVerification", profileClass);
+            Method startVerification = findGameProfileMethod(listener.getClass(),
+                    "startClientVerification", profileClass);
             if (startVerification != null) {
                 startVerification.setAccessible(true);
                 startVerification.invoke(listener, profile);
-                plugin.getLogger().info("Accepted offline player: " + username + (accountBinding.isNewUuidBound(offlineUuid(username)) ? " (bound)" : ""));
                 return true;
             }
 
-            Method finishLogin = findGameProfileMethod(listener.getClass(), "finishLoginAndWaitForClient", profileClass);
+            Method finishLogin = findGameProfileMethod(listener.getClass(),
+                    "finishLoginAndWaitForClient", profileClass);
             if (finishLogin == null) {
                 plugin.getLogger().fine("Could not find Folia offline login methods");
                 return false;
@@ -377,10 +296,10 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
             setFieldIfPresent(listener, "authenticatedProfile", profile);
             finishLogin.setAccessible(true);
             finishLogin.invoke(listener, profile);
-            plugin.getLogger().info("Accepted offline player: " + username + (accountBinding.isNewUuidBound(offlineUuid(username)) ? " (bound)" : ""));
             return true;
         } catch (ReflectiveOperationException | RuntimeException exception) {
-            plugin.getLogger().log(Level.FINE, "Failed to accept Folia offline login for " + username, exception);
+            plugin.getLogger().log(Level.FINE,
+                    "Failed to accept offline login for " + username, exception);
             return false;
         }
     }
@@ -398,7 +317,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         if (listener == null) {
             return;
         }
-        Field field = findField(listener.getClass(), "iKnowThisMayNotBeTheBestIdeaButPleaseDisableUsernameValidation");
+        Field field = findField(listener.getClass(),
+                "iKnowThisMayNotBeTheBestIdeaButPleaseDisableUsernameValidation");
         if (field == null) {
             return;
         }
@@ -406,7 +326,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
             field.setAccessible(true);
             field.setBoolean(listener, true);
         } catch (ReflectiveOperationException | RuntimeException exception) {
-            plugin.getLogger().log(Level.FINE, "Failed to disable vanilla username validation", exception);
+            plugin.getLogger().log(Level.FINE,
+                    "Failed to disable vanilla username validation", exception);
         }
     }
 
@@ -420,7 +341,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
                 try {
                     field.setAccessible(true);
                     Object value = field.get(connection);
-                    if (value != null && value.getClass().getName().contains("ServerLoginPacketListenerImpl")) {
+                    if (value != null
+                            && value.getClass().getName().contains("ServerLoginPacketListenerImpl")) {
                         return value;
                     }
                 } catch (ReflectiveOperationException | RuntimeException ignored) {
@@ -474,7 +396,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
             Method getConnection = minecraftServer.getClass().getMethod("getConnection");
             return getConnection.invoke(minecraftServer);
         } catch (ReflectiveOperationException | RuntimeException exception) {
-            plugin.getLogger().log(Level.WARNING, "Failed to access Folia server connection", exception);
+            plugin.getLogger().log(Level.WARNING,
+                    "Failed to access Folia server connection", exception);
             return null;
         }
     }
@@ -525,7 +448,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
             field.setAccessible(true);
             field.set(target, value);
         } catch (ReflectiveOperationException | RuntimeException exception) {
-            plugin.getLogger().log(Level.FINE, "Failed to set Folia login field " + name, exception);
+            plugin.getLogger().log(Level.FINE,
+                    "Failed to set Folia login field " + name, exception);
         }
     }
 
@@ -533,8 +457,9 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         Class<?> current = type;
         while (current != null) {
             for (Method method : current.getDeclaredMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if (parameters.length != 1 || parameters[0] != profileClass || method.getReturnType() != Void.TYPE) {
+                Class<?>[] params = method.getParameterTypes();
+                if (params.length != 1 || params[0] != profileClass
+                        || method.getReturnType() != Void.TYPE) {
                     continue;
                 }
                 if (method.getName().equals(preferredName)) {
@@ -546,8 +471,9 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         current = type;
         while (current != null) {
             for (Method method : current.getDeclaredMethods()) {
-                Class<?>[] parameters = method.getParameterTypes();
-                if (parameters.length == 1 && parameters[0] == profileClass && method.getReturnType() == Void.TYPE) {
+                Class<?>[] params = method.getParameterTypes();
+                if (params.length == 1 && params[0] == profileClass
+                        && method.getReturnType() == Void.TYPE) {
                     return method;
                 }
             }
