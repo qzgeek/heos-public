@@ -37,7 +37,7 @@
   "text.heos.bindRequestFailed": "\u00a7c绑定请求失败，请稍后重试。",
   "text.heos.bindRequestSent": "\u00a7a已向 %s 发送绑定请求。请通知该玩家使用 /heos bind accept <你的名字> 来确认绑定。",
   "text.heos.bindNoPendingRequest": "\u00a7c没有来自 %s 的待处理绑定请求。",
-  "text.heos.bindAccepted": "\u00a7a已同意 %s 的绑定请求！%s 下次登录时将自动使用你的账号数据。",
+  "text.heos.bindAccepted": "\u00a7a已同意 %s 的绑定请求！下次登录时将自动使用你的账号数据。",
   "text.heos.bindDenied": "\u00a7e已拒绝 %s 的绑定请求。",
   "text.heos.bindNotPending": "\u00a7e该绑定记录不是待处理状态。",
   "text.heos.bindRevoked": "\u00a7a已撤销绑定 #%d。",

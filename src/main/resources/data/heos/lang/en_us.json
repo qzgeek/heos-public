@@ -37,7 +37,7 @@
   "text.heos.bindRequestFailed": "\u00a7cBinding request failed. Please try again later.",
   "text.heos.bindRequestSent": "\u00a7aBinding request sent to %s. Tell that player to use /heos bind accept <your name> to confirm.",
   "text.heos.bindNoPendingRequest": "\u00a7cNo pending binding request from %s.",
-  "text.heos.bindAccepted": "\u00a7aAccepted binding from %s! %s will now use your account data on next login.",
+  "text.heos.bindAccepted": "\u00a7aAccepted binding from %s! They will now use your account data on next login.",
   "text.heos.bindDenied": "\u00a7eBinding request from %s has been denied.",
   "text.heos.bindNotPending": "\u00a7eThis binding record is not in pending state.",
   "text.heos.bindRevoked": "\u00a7aBinding #%d has been revoked.",
