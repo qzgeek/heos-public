@@ -136,7 +136,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
         if (all.size() > 1) {
             // Ambiguous — show hint
             sender.sendMessage(ChatColor.RED + ambiguousNameMsg(nameArg));
-            sender.sendMessage(ChatColor.YELLOW + FoliaMessages.nameAmbiguousHint());
+            sender.sendMessage(ChatColor.YELLOW + heos.folia.utils.FoliaMessages.nameAmbiguousHint());
             for (FoliaPlayerData data : all) {
                 nameResolver.resolve(data);
                 sender.sendMessage(ChatColor.GRAY + "  - " + data.effectiveDisplayName()

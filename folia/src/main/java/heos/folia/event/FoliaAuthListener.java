@@ -1,7 +1,7 @@
 package heos.folia.event;
 
 import heos.folia.storage.FoliaBanData;
-import heos.folia.storage.FoliaNameResolver;
+import heos.folia.utils.FoliaNameResolver;
 import heos.folia.storage.FoliaPlayerData;
 import heos.folia.storage.FoliaWhitelistData;
 import net.kyori.adventure.text.Component;
