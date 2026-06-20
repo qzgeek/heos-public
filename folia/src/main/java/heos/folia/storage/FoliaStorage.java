@@ -110,8 +110,9 @@ public final class FoliaStorage {
                     + "bound_name VARCHAR(64) NOT NULL,"
                     + "status VARCHAR(16) NOT NULL DEFAULT 'pending',"
                     + "created_at BIGINT NOT NULL,"
-                    + "accepted_at BIGINT,"
-                    + (useMySQL ? "PRIMARY KEY (id)" : "") + ");");
+                    + "accepted_at BIGINT"
+                    + (useMySQL ? ", PRIMARY KEY (id)" : "")
+                    + ");");
             s.executeUpdate("CREATE INDEX IF NOT EXISTS idx_bindings_target ON "
                     + BIND_TABLE + "(target_uuid);");
             s.executeUpdate("CREATE INDEX IF NOT EXISTS idx_bindings_bound ON "
