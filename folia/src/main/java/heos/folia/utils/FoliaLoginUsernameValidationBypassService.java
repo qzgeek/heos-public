@@ -8,8 +8,6 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
-import org.bukkit.Bukkit;
-import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 import java.lang.reflect.Field;
@@ -27,17 +25,13 @@ import java.util.logging.Level;
 /**
  * Netty hook for login bypass and account binding UUID remapping.
  *
- * For offline players (non-standard usernames):
- *   Bypasses Mojang verification and creates an offline GameProfile.
- *
- * For bound accounts:
- *   Remaps the UUID to the target UUID BEFORE the server processes the login.
- *   Also checks that no one else in the binding group is already online.
+ * Key fix: the bootstrap handler itself processes the first Hello packet
+ * to eliminate the race condition where PACKET_HANDLER isn't installed in time.
  */
 public final class FoliaLoginUsernameValidationBypassService implements AutoCloseable {
-    private static final String ACCEPTOR = "heos_login_acceptor";
-    private static final String CHILD_BOOT = "heos_login_child_bootstrap";
-    private static final String PACKET_HANDLER = "heos_login_username_validation_bypass";
+    private static final String ACCEPTOR = "heos_acceptor";
+    private static final String CHILD_BOOT = "heos_child_boot";
+    private static final String PACKET_H = "heos_packet";
     private static final String VANILLA = "packet_handler";
 
     private final Plugin plugin;
@@ -59,7 +53,7 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         for (Channel ch : serverChannels()) installServerChannel(ch);
         if (serverChannels.isEmpty())
             plugin.getLogger().warning("No server channels found for login bypass");
-        plugin.getLogger().info("Installed Folia login bypass (UUID remapping + concurrency check)");
+        plugin.getLogger().info("Installed Folia login bypass (race-condition fixed)");
     }
 
     @Override
@@ -68,6 +62,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
             ch.eventLoop().execute(() -> remove(ch, ACCEPTOR));
         serverChannels.clear();
     }
+
+    // === Server channel hook ===
 
     private void installServerChannel(Channel ch) {
         if (ch == null || serverChannels.contains(ch)) return;
@@ -83,84 +79,99 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         });
     }
 
+    // === Child channel hook — handles Hello packet directly to avoid race ===
+
     private void installChildBootstrap(Channel ch) {
-        if (ch.pipeline().get(CHILD_BOOT) != null || ch.pipeline().get(PACKET_HANDLER) != null) return;
+        if (ch.pipeline().get(CHILD_BOOT) != null || ch.pipeline().get(PACKET_H) != null) return;
         ch.pipeline().addFirst(CHILD_BOOT, new ChannelDuplexHandler() {
             public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
-                installChildChannel(ctx.channel(), 0); super.channelRegistered(ctx);
+                ensureChildHandler(ctx.channel(), 0);
+                super.channelRegistered(ctx);
             }
             public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                installChildChannel(ctx.channel(), 0); super.channelRead(ctx, msg);
+                if (isHelloPacket(msg)) {
+                    // Process the Hello packet HERE — don't pass it through until
+                    // we've installed our handler or handled it ourselves.
+                    String username = packetUsername(msg);
+                    if (username != null) {
+                        boolean handled = processHello(ctx.channel(), username);
+                        if (handled) return; // Don't pass to vanilla
+                    }
+                }
+                // Ensure handler is installed for future packets (not this one)
+                ensureChildHandler(ctx.channel(), 0);
+                super.channelRead(ctx, msg);
             }
         });
     }
 
-    private void installChildChannel(Channel ch, int attempts) {
+    /** Install PACKET_H for future packets if VANILLA is ready. */
+    private void ensureChildHandler(Channel ch, int attempts) {
         if (!ch.isRegistered() || !ch.isOpen()) return;
-        if (ch.pipeline().get(PACKET_HANDLER) != null) { remove(ch, CHILD_BOOT); return; }
+        if (ch.pipeline().get(PACKET_H) != null) { remove(ch, CHILD_BOOT); return; }
         if (ch.pipeline().get(VANILLA) == null) {
             if (attempts < 20)
-                ch.eventLoop().schedule(() -> installChildChannel(ch, attempts + 1), 25L, java.util.concurrent.TimeUnit.MILLISECONDS);
+                ch.eventLoop().schedule(() -> ensureChildHandler(ch, attempts + 1),
+                        25L, java.util.concurrent.TimeUnit.MILLISECONDS);
             return;
         }
-
-        ch.pipeline().addBefore(VANILLA, PACKET_HANDLER, new ChannelDuplexHandler() {
+        ch.pipeline().addBefore(VANILLA, PACKET_H, new ChannelDuplexHandler() {
             public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
                 if (!isHelloPacket(msg)) { super.channelRead(ctx, msg); return; }
                 String username = packetUsername(msg);
                 if (username == null) { super.channelRead(ctx, msg); return; }
-
-                // 1) Reject banned / not-whitelisted
-                if (rejectHeosLogin(ctx.channel(), username)) return;
-
-                // 2) Compute the expected UUID for this username (offline formula)
-                UUID rawUuid = offlineUuid(username);
-
-                // 3) Account binding: check if bound, remap UUID, check concurrency
-                UUID effectiveUuid = rawUuid;
-                boolean enableBinding = plugin.getConfig().getBoolean("enableAccountBinding", true);
-                if (enableBinding) {
-                    UUID targetUuid = accountBinding.resolveEffectiveUuid(rawUuid);
-                    if (!targetUuid.equals(rawUuid)) {
-                        // This is a bound account. Check group online status.
-                        String onlineName = accountBinding.checkGroupOnline(rawUuid);
-                        if (onlineName != null) {
-                            // Someone in the group is online — reject
-                            disconnectLogin(ctx.channel(), FoliaMessages.bindGroupOnline(onlineName));
-                            plugin.getLogger().info("Rejected bound player " + username + " — " + onlineName + " is online in the same group");
-                            return;
-                        }
-                        effectiveUuid = targetUuid;
-                        plugin.getLogger().info("Bound player " + username + " → target UUID " + effectiveUuid);
-                    }
-                }
-
-                // 4) Offline bypass for non-standard usernames
-                boolean allowOffline = plugin.getConfig().getBoolean("allowOfflinePlayers", true);
-                boolean isStandard = FoliaMojangApi.isValidMojangUsername(username);
-
-                if (allowOffline && !isStandard) {
-                    acceptOfflineLogin(ctx.channel(), username, effectiveUuid);
-                    return;
-                }
-
-                // 5) If UUID was remapped by binding, also use the remapped UUID for login
-                //    (but don't bypass Mojang - let it verify normally for standard names)
-                if (enableBinding && !effectiveUuid.equals(rawUuid)) {
-                    // For bound accounts with standard names, we need to force the target UUID
-                    // even though Mojang would normally create a different profile.
-                    // The binding takes precedence.
-                    acceptOfflineLogin(ctx.channel(), username, effectiveUuid);
-                    return;
-                }
-
+                if (processHello(ctx.channel(), username)) return;
                 super.channelRead(ctx, msg);
             }
         });
         remove(ch, CHILD_BOOT);
     }
 
-    // ================ Rejection ================
+    // === Core logic: process a Hello packet. Returns true if handled (don't pass through). ===
+
+    private boolean processHello(Channel ch, String username) {
+        // 1) Reject banned / not-whitelisted
+        if (rejectHeosLogin(ch, username)) return true;
+
+        // 2) Compute expected UUID
+        UUID rawUuid = offlineUuid(username);
+        UUID effectiveUuid = rawUuid;
+
+        // 3) Account binding: remap UUID + concurrency check
+        boolean enableBinding = plugin.getConfig().getBoolean("enableAccountBinding", true);
+        if (enableBinding) {
+            UUID targetUuid = accountBinding.resolveEffectiveUuid(rawUuid);
+            if (!targetUuid.equals(rawUuid)) {
+                String onlineName = accountBinding.checkGroupOnline(rawUuid);
+                if (onlineName != null) {
+                    disconnectLogin(ch, FoliaMessages.bindGroupOnline(onlineName));
+                    plugin.getLogger().info("Rejected bound player " + username + " — " + onlineName + " is online");
+                    return true;
+                }
+                effectiveUuid = targetUuid;
+                plugin.getLogger().info("Bound player " + username + " → target UUID " + effectiveUuid);
+            }
+        }
+
+        // 4) Offline bypass for non-standard usernames
+        boolean allowOffline = plugin.getConfig().getBoolean("allowOfflinePlayers", true);
+        boolean isStandard = FoliaMojangApi.isValidMojangUsername(username);
+
+        if (allowOffline && !isStandard) {
+            acceptOfflineLogin(ch, username, effectiveUuid);
+            return true;
+        }
+
+        // 5) Bound account with standard name: force target UUID
+        if (enableBinding && !effectiveUuid.equals(rawUuid)) {
+            acceptOfflineLogin(ch, username, effectiveUuid);
+            return true;
+        }
+
+        return false; // Not handled — let vanilla process
+    }
+
+    // === Rejection ===
 
     private boolean rejectHeosLogin(Channel ch, String username) {
         return rejectBan(username, ch) || rejectWhitelist(username, ch);
@@ -169,8 +180,8 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
     private boolean rejectWhitelist(String username, Channel ch) {
         if (!plugin.getConfig().getBoolean("enableWhitelist", false) || whitelistData.isWhitelisted(username))
             return false;
-        plugin.getLogger().info(FoliaMessages.whitelistDeniedLog(username));
-        return disconnectLogin(ch, FoliaMessages.whitelistKick());
+        disconnectLogin(ch, FoliaMessages.whitelistKick());
+        return true;
     }
 
     private boolean rejectBan(String username, Channel ch) {
@@ -178,15 +189,17 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         if (ban != null) {
             if (!plugin.getConfig().getBoolean("enableCustomBan", true)
                     && !FoliaMessages.isMigrationReason(ban.reason)) return false;
-            return disconnectLogin(ch, FoliaMessages.banMessage(ban.reason, FoliaTimeParser.formatAbsolute(ban.expiryTime)));
+            disconnectLogin(ch, FoliaMessages.banMessage(ban.reason, FoliaTimeParser.formatAbsolute(ban.expiryTime)));
+            return true;
         }
         if (!plugin.getConfig().getBoolean("enableCustomBan", true)) return false;
         FoliaBanData.IpBanEntry ip = banData.getIpBan(channelIp(ch));
         if (ip == null) return false;
-        return disconnectLogin(ch, FoliaMessages.banIpMessage(ip.reason, FoliaTimeParser.formatAbsolute(ip.expiryTime)));
+        disconnectLogin(ch, FoliaMessages.banIpMessage(ip.reason, FoliaTimeParser.formatAbsolute(ip.expiryTime)));
+        return true;
     }
 
-    // ================ Offline login ================
+    // === Offline login ===
 
     private void acceptOfflineLogin(Channel ch, String username, UUID uuid) {
         ChannelHandler handler = ch.pipeline().get(VANILLA);
@@ -194,24 +207,18 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         Object listener = findPacketListener(handler);
         if (listener == null) return;
         try {
-            Class<?> profileClass = Class.forName("com.mojang.authlib.GameProfile");
-            Object profile = profileClass.getConstructor(UUID.class, String.class).newInstance(uuid, username);
+            Class<?> pc = Class.forName("com.mojang.authlib.GameProfile");
+            Object profile = pc.getConstructor(UUID.class, String.class).newInstance(uuid, username);
             setField(listener, "requestedUsername", username);
             setField(listener, "requestedUuid", uuid);
-
-            Method m = findGameProfileMethod(listener.getClass(), "startClientVerification", profileClass);
+            Method m = findGameProfileMethod(listener.getClass(), "startClientVerification", pc);
             if (m != null) { m.setAccessible(true); m.invoke(listener, profile); return; }
-            m = findGameProfileMethod(listener.getClass(), "finishLoginAndWaitForClient", profileClass);
-            if (m != null) {
-                setField(listener, "authenticatedProfile", profile);
-                m.setAccessible(true); m.invoke(listener, profile);
-            }
+            m = findGameProfileMethod(listener.getClass(), "finishLoginAndWaitForClient", pc);
+            if (m != null) { setField(listener, "authenticatedProfile", profile); m.setAccessible(true); m.invoke(listener, profile); }
         } catch (Exception e) {
             plugin.getLogger().log(Level.FINE, "Failed offline login for " + username, e);
         }
     }
-
-    // ================ Reflection helpers ================
 
     private boolean disconnectLogin(Channel ch, String msg) {
         ChannelHandler h = ch.pipeline().get(VANILLA);
@@ -220,11 +227,13 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
         if (listener == null) return false;
         try {
             Class<?> cc = Class.forName("net.minecraft.network.chat.Component");
-            Object comp = cc.getMethod("literal", String.class).invoke(null, msg);
-            listener.getClass().getMethod("disconnect", cc).invoke(listener, comp);
+            listener.getClass().getMethod("disconnect", cc)
+                    .invoke(listener, cc.getMethod("literal", String.class).invoke(null, msg));
             return true;
-        } catch (Exception e) { return false; }
+        } catch (Exception ignored) { return false; }
     }
+
+    // === Reflection ===
 
     private Object findPacketListener(Object conn) {
         for (Class<?> t = conn.getClass(); t != null; t = t.getSuperclass()) {
@@ -262,18 +271,17 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
 
     private Object serverConnection() {
         try {
-            Method getServer = plugin.getServer().getClass().getMethod("getServer");
-            Object srv = getServer.invoke(plugin.getServer());
-            return srv.getClass().getMethod("getConnection").invoke(srv);
-        } catch (Exception e) {
-            plugin.getLogger().log(Level.WARNING, "Failed to access server connection", e);
-            return null;
-        }
+            return plugin.getServer().getClass().getMethod("getServer").invoke(plugin.getServer())
+                    .getClass().getMethod("getConnection").invoke(
+                            plugin.getServer().getClass().getMethod("getServer").invoke(plugin.getServer()));
+        } catch (Exception e) { return null; }
     }
 
-    private boolean isHelloPacket(Object p) { return p != null && p.getClass().getName().endsWith("ServerboundHelloPacket"); }
+    private static boolean isHelloPacket(Object p) {
+        return p != null && p.getClass().getName().endsWith("ServerboundHelloPacket");
+    }
 
-    private String packetUsername(Object p) {
+    private static String packetUsername(Object p) {
         for (Method m : p.getClass().getMethods())
             if (m.getParameterCount() == 0 && m.getReturnType() == String.class)
                 try { return (String) m.invoke(p); } catch (Exception ignored) {}
@@ -288,20 +296,19 @@ public final class FoliaLoginUsernameValidationBypassService implements AutoClos
     }
 
     private static String channelIp(Channel ch) {
-        if (ch.remoteAddress() instanceof InetSocketAddress a && a.getAddress() != null)
-            return a.getAddress().getHostAddress();
-        return "";
+        return ch.remoteAddress() instanceof InetSocketAddress a && a.getAddress() != null
+                ? a.getAddress().getHostAddress() : "";
     }
 
-    private Method findGameProfileMethod(Class<?> t, String name, Class<?> profileClass) {
+    private Method findGameProfileMethod(Class<?> t, String name, Class<?> pc) {
         for (Class<?> c = t; c != null; c = c.getSuperclass())
             for (Method m : c.getDeclaredMethods())
-                if (m.getParameterCount() == 1 && m.getParameterTypes()[0] == profileClass
+                if (m.getParameterCount() == 1 && m.getParameterTypes()[0] == pc
                         && m.getReturnType() == Void.TYPE && m.getName().equals(name))
                     return m;
         for (Class<?> c = t; c != null; c = c.getSuperclass())
             for (Method m : c.getDeclaredMethods())
-                if (m.getParameterCount() == 1 && m.getParameterTypes()[0] == profileClass
+                if (m.getParameterCount() == 1 && m.getParameterTypes()[0] == pc
                         && m.getReturnType() == Void.TYPE)
                     return m;
         return null;
