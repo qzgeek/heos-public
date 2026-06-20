@@ -115,12 +115,13 @@ public final class FoliaBindCommands implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("heos.admin")) { sender.sendMessage(ChatColor.RED + "Permission denied."); return; }
         if (args.length < 2) { sender.sendMessage(ChatColor.RED + FoliaMessages.bindUsageRevoke()); return; }
         try {
-            long id = Long.parseLong(args[1]);
+            String idStr = args[1].startsWith("#") ? args[1].substring(1) : args[1];
+            long id = Long.parseLong(idStr);
             sender.sendMessage(storage.revokeBinding(id)
                     ? ChatColor.GREEN + FoliaMessages.bindRevoked(id)
                     : ChatColor.RED + "Binding not found.");
         } catch (NumberFormatException e) {
-            sender.sendMessage(ChatColor.RED + "Invalid binding ID.");
+            sender.sendMessage(ChatColor.RED + "Invalid binding ID. Use /heos bind list to see IDs.");
         }
     }
 
