@@ -106,7 +106,23 @@ public final class FoliaAuthService {
     }
 
     private boolean isPremiumUuid(Player player) {
-        UUID offline = UUID.nameUUIDFromBytes(("OfflinePlayer:" + player.getName()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        // Bound accounts always get offline UUIDs (remapped to target)
+        if (accountBinding.resolveEffectiveUuid(
+                UUID.nameUUIDFromBytes(("OfflinePlayer:" + player.getName())
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+                .equals(player.getUniqueId())) {
+            // The player's UUID matches what the binding system would produce
+            // for their name. If it's different from the raw offline UUID,
+            // it means they're a bound account — NOT premium.
+            UUID rawOffline = UUID.nameUUIDFromBytes(
+                    ("OfflinePlayer:" + player.getName())
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            if (!player.getUniqueId().equals(rawOffline)) {
+                return false; // Bound account, not premium
+            }
+        }
+        UUID offline = UUID.nameUUIDFromBytes(("OfflinePlayer:" + player.getName())
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
         return !player.getUniqueId().equals(offline);
     }
 
