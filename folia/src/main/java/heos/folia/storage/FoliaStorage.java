@@ -121,6 +121,23 @@ public final class FoliaStorage {
                     + BIND_TABLE + "(target_name);");
             s.executeUpdate("CREATE INDEX IF NOT EXISTS idx_bindings_status ON "
                     + BIND_TABLE + "(status);");
+
+            // QQ Bot tables
+            s.executeUpdate("CREATE TABLE IF NOT EXISTS qq_whitelist ("
+                    + "qq BIGINT NOT NULL,"
+                    + "player_name VARCHAR(64) NOT NULL,"
+                    + "player_uuid VARCHAR(36),"
+                    + "added_at BIGINT NOT NULL,"
+                    + "PRIMARY KEY (qq, player_name)"
+                    + ");");
+            s.executeUpdate("CREATE INDEX IF NOT EXISTS idx_qq_whitelist_uuid ON qq_whitelist(player_uuid);");
+
+            s.executeUpdate("CREATE TABLE IF NOT EXISTS qq_blacklist ("
+                    + "qq BIGINT PRIMARY KEY,"
+                    + "reason TEXT,"
+                    + "banned_at BIGINT NOT NULL,"
+                    + "expiry BIGINT"
+                    + ");");
         }
     }
 
@@ -474,6 +491,12 @@ public final class FoliaStorage {
     }
 
     // ================ Lifecycle ================
+
+    /** Get raw JDBC connection (for external modules like BotDb). */
+    public synchronized java.sql.Connection getConnection() {
+        initialize();
+        return connection;
+    }
 
     public synchronized void close() {
         if (connection == null) return;

@@ -78,6 +78,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             case "info" -> info(sender, args);
             case "whitelist" -> whitelist(sender, args);
             case "migrate", "confirm-click" -> migrationCommands.onHeosSubcommand(sender, args);
+            case "migrate-authme" -> migrateAuthMe(sender, args);
             case "reload" -> reload(sender, args);
             case "ban", "ban-ip", "unban", "unban-ip", "banlist" -> banCommands.onSubcommand(sender, sub, shiftArgs(args));
             default -> { showHelp(sender); yield true; }
@@ -96,6 +97,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             sender.sendMessage(ChatColor.WHITE + "/los resetpassword <玩家> <密码>" + ChatColor.GRAY + " - 重置密码");
             sender.sendMessage(ChatColor.WHITE + "/los whitelist add/remove/list" + ChatColor.GRAY + " - 白名单");
             sender.sendMessage(ChatColor.WHITE + "/los migrate <源> <目标>" + ChatColor.GRAY + " - 数据迁移");
+            sender.sendMessage(ChatColor.WHITE + "/los migrate-authme <路径>" + ChatColor.GRAY + " - AuthMe迁移");
             sender.sendMessage(ChatColor.WHITE + "/los reload" + ChatColor.GRAY + " - 重载配置");
             sender.sendMessage(ChatColor.WHITE + "/ban /ban-ip /unban /banlist" + ChatColor.GRAY + " - 封禁管理");
         }
@@ -304,7 +306,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             if (sender.hasPermission("luoos.admin")) {
                 subs.add("ban"); subs.add("ban-ip"); subs.add("unban"); subs.add("unban-ip");
                 subs.add("banlist"); subs.add("resetpassword"); subs.add("info");
-                subs.add("whitelist"); subs.add("migrate"); subs.add("reload");
+                subs.add("whitelist"); subs.add("migrate"); subs.add("migrate-authme"); subs.add("reload");
             }
             return filter(subs, args[0]);
         }
@@ -332,6 +334,24 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             return names;
         }
         return Collections.emptyList();
+    }
+
+    private boolean migrateAuthMe(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "Usage: /los migrate-authme <path-to-authme-db>");
+            return true;
+        }
+        String path = args[1];
+        sender.sendMessage(ChatColor.YELLOW + "正在从 " + path + " 迁移 AuthMe 数据...");
+        try {
+            heos.folia.utils.AuthMeMigrator migrator = new heos.folia.utils.AuthMeMigrator(
+                    java.util.logging.Logger.getLogger("LuoOS-AuthMe"), authService.getStorage());
+            int count = migrator.migrateFromSQLite(path);
+            sender.sendMessage(ChatColor.GREEN + "迁移完成！共迁移 " + count + " 个账号。");
+        } catch (Exception e) {
+            sender.sendMessage(ChatColor.RED + "迁移失败: " + e.getMessage());
+        }
+        return true;
     }
 
     private boolean reload(CommandSender sender, String[] args) {

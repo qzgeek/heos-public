@@ -70,6 +70,22 @@ bindingStorage: sqlite
 #  password: changeme
 
 # =============================================================================
+# OneBot QQ Bot / QQ机器人
+# =============================================================================
+
+# Enable the embedded OneBot WebSocket server for QQ group integration.
+# 是否启用内嵌的 OneBot WebSocket 服务器用于QQ群集成。
+bot:
+  enabled: false
+  host: 0.0.0.0
+  port: 10100
+  access_token: ""
+  qq_groups: []
+  max_per_qq: 3
+  allowed_id_chars: "a-zA-Z0-9_-"
+  max_id_length: 16
+
+# =============================================================================
 # TPS Display / TPS 显示
 # =============================================================================
 

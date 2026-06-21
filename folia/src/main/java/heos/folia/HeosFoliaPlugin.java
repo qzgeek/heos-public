@@ -6,6 +6,9 @@ import heos.folia.commands.FoliaBanCommands;
 import heos.folia.commands.FoliaBindCommands;
 import heos.folia.commands.FoliaBindUI;
 import heos.folia.commands.FoliaMigrationCommands;
+import heos.folia.bot.OneBotServer;
+import heos.folia.bot.BotCommandHandler;
+import heos.folia.bot.BotDb;
 import heos.folia.event.FoliaAuthListener;
 import heos.folia.event.FoliaAuthService;
 import heos.folia.event.FoliaCommandInterceptor;
@@ -30,6 +33,7 @@ public final class HeosFoliaPlugin extends JavaPlugin {
     private FoliaTpsDisplayService tpsDisplayService;
     private FoliaRecipeSyncService recipeSyncService;
     private FoliaLoginUsernameValidationBypassService bypassService;
+    private OneBotServer botServer;
 
     @Override
     public void onEnable() {
@@ -83,6 +87,26 @@ public final class HeosFoliaPlugin extends JavaPlugin {
                 this, banData, whitelistData, accountBinding);
         bypassService.install();
 
+        // OneBot QQ bot
+        if (getConfig().getBoolean("bot.enabled", false)) {
+            String botHost = getConfig().getString("bot.host", "0.0.0.0");
+            int botPort = getConfig().getInt("bot.port", 10100);
+            String botToken = getConfig().getString("bot.access_token", "");
+            long[] groups = getConfig().getLongList("bot.qq_groups").stream().mapToLong(Long::longValue).toArray();
+            int maxPerQq = getConfig().getInt("bot.max_per_qq", 3);
+            String idChars = getConfig().getString("bot.allowed_id_chars", "a-zA-Z0-9_-");
+            int maxIdLen = getConfig().getInt("bot.max_id_length", 16);
+
+            BotDb botDb = new BotDb(getLogger(), storage);
+            BotCommandHandler botHandler = new BotCommandHandler(
+                    getLogger(), botDb, storage, maxPerQq, idChars, maxIdLen, groups);
+
+            botServer = new OneBotServer(getLogger(), botHost, botPort, botToken);
+            botServer.setEventHandler(event -> botHandler.handle(event));
+            new Thread(botServer::start, "LuoOS-Bot").start();
+            getLogger().info("OneBot server started on ws://" + botHost + ":" + botPort);
+        }
+
         getLogger().info("Heos Folia enabled (UUID-based + Account Binding + Group Concurrency)");
         getLogger().info("Account binding: " + getConfig().getBoolean("enableAccountBinding", true));
         getLogger().info("Binding storage: " + bindingStorage);
@@ -97,6 +121,7 @@ public final class HeosFoliaPlugin extends JavaPlugin {
         if (tpsDisplayService != null) tpsDisplayService.close();
         if (recipeSyncService != null) recipeSyncService.close();
         if (bypassService != null) bypassService.close();
+        if (botServer != null) botServer.stop();
     }
 
     private void registerCommands(FoliaBanCommands banCommands, FoliaAdminCommands adminCommands) {
