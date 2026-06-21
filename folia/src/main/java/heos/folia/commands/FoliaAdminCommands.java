@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.io.File;
 import java.util.UUID;
 
 public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
@@ -337,16 +338,18 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
     }
 
     private boolean migrateAuthMe(CommandSender sender, String[] args) {
-        if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "Usage: /los migrate-authme <path-to-authme-db>");
+        String authMeDir = args.length >= 2 ? args[1] : "plugins/AuthMe";
+        File dir = new File(authMeDir);
+        if (!dir.exists() || !new File(dir, "config.yml").exists()) {
+            sender.sendMessage(ChatColor.RED + "AuthMe config not found at " + dir.getAbsolutePath());
+            sender.sendMessage(ChatColor.GRAY + "Usage: /los migrate-authme [path-to-AuthMe-plugin-dir]");
             return true;
         }
-        String path = args[1];
-        sender.sendMessage(ChatColor.YELLOW + "正在从 " + path + " 迁移 AuthMe 数据...");
+        sender.sendMessage(ChatColor.YELLOW + "正在从 " + authMeDir + " 迁移 AuthMe 数据...");
         try {
             heos.folia.utils.AuthMeMigrator migrator = new heos.folia.utils.AuthMeMigrator(
                     java.util.logging.Logger.getLogger("LuoOS-AuthMe"), authService.getStorage());
-            int count = migrator.migrateFromSQLite(path);
+            int count = migrator.migrate(authMeDir);
             sender.sendMessage(ChatColor.GREEN + "迁移完成！共迁移 " + count + " 个账号。");
         } catch (Exception e) {
             sender.sendMessage(ChatColor.RED + "迁移失败: " + e.getMessage());

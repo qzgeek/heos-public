@@ -57,6 +57,7 @@ subprojects {
         nettyCompileOnly("netty-transport", "4.1.118.Final")
         "compileOnly"("org.apache.logging.log4j:log4j-core:2.24.3")
         "implementation"("org.xerial:sqlite-jdbc:3.49.1.0")
+        "implementation"("at.favre.lib:bcrypt:0.10.2")
     }
 
     val isMinecraft26Plus = project.name.substringBefore('.').toIntOrNull()?.let { it >= 26 } == true
