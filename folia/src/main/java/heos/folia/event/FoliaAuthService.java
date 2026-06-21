@@ -308,6 +308,16 @@ public final class FoliaAuthService {
         return sessions.computeIfAbsent(uuid, ignored -> {
             FoliaPlayerData data = storage.load(uuid);
             if (data == null) {
+                // Fallback: search by name (handles case-insensitive offline UUIDs)
+                data = storage.load(player.getName());
+                if (data != null) {
+                    // Update stored UUID to match the current player's UUID
+                    storage.delete(data.uuid);
+                    data.uuid = uuid;
+                    storage.save(data);
+                }
+            }
+            if (data == null) {
                 boolean premium = isPremiumUuid(player);
                 data = new FoliaPlayerData(player.getName(), uuid, premium);
                 nameResolver.resolve(data);

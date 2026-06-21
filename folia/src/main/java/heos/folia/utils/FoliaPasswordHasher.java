@@ -109,8 +109,9 @@ public final class FoliaPasswordHasher {
     private static boolean verifySha256(String password, String saltHex, String hashHex) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            md.update(HexFormat.of().parseHex(saltHex));
-            byte[] computed = md.digest(password.getBytes("UTF-8"));
+            // AuthMe SHA256: SHA256(SHA256(password) + saltHex)
+            String innerHash = HexFormat.of().formatHex(md.digest(password.getBytes("UTF-8")));
+            byte[] computed = md.digest((innerHash + saltHex).getBytes("UTF-8"));
             return slowEquals(computed, HexFormat.of().parseHex(hashHex));
         } catch (Exception e) {
             return false;

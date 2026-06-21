@@ -8,6 +8,7 @@ import heos.folia.commands.FoliaBindUI;
 import heos.folia.commands.FoliaMigrationCommands;
 import heos.folia.bot.OneBotServer;
 import heos.folia.bot.BotCommandHandler;
+import heos.folia.bot.BotStatusService;
 import heos.folia.bot.BotDb;
 import heos.folia.event.FoliaAuthListener;
 import heos.folia.event.FoliaAuthService;
@@ -97,13 +98,25 @@ public final class HeosFoliaPlugin extends JavaPlugin {
             String idChars = getConfig().getString("bot.allowed_id_chars", "a-zA-Z0-9_-");
             int maxIdLen = getConfig().getInt("bot.max_id_length", 16);
 
+            String statusTrigger = getConfig().getString("bot.status_trigger", "服务器还活着吗");
+            int rateMax = getConfig().getInt("bot.rate_limit_max", 3);
+            int rateWindow = getConfig().getInt("bot.rate_limit_window", 60);
+
+            String mcHost = getConfig().getString("bot.mc_host", "127.0.0.1");
+            int mcPort = getConfig().getInt("bot.mc_port", 25565);
+            String mcName = getConfig().getString("bot.mc_display_name", "LuoOS服务器");
+            String mcDesc = getConfig().getString("bot.mc_description", "欢迎来到LuoOS");
+            BotStatusService statusService = new BotStatusService(getLogger(), mcHost, mcPort, mcName, mcDesc);
+
             BotDb botDb = new BotDb(getLogger(), storage);
             BotCommandHandler botHandler = new BotCommandHandler(
-                    getLogger(), botDb, storage, maxPerQq, idChars, maxIdLen, groups);
+                    getLogger(), botDb, storage, statusService,
+                    maxPerQq, idChars, maxIdLen, groups,
+                    statusTrigger, rateMax, rateWindow);
 
             botServer = new OneBotServer(getLogger(), botHost, botPort, botToken);
             botServer.setEventHandler(event -> botHandler.handle(event));
-            new Thread(botServer::start, "LuoOS-Bot").start();
+            new Thread(botServer::startServer, "LuoOS-Bot").start();
             getLogger().info("OneBot server started on ws://" + botHost + ":" + botPort);
         }
 
@@ -121,7 +134,7 @@ public final class HeosFoliaPlugin extends JavaPlugin {
         if (tpsDisplayService != null) tpsDisplayService.close();
         if (recipeSyncService != null) recipeSyncService.close();
         if (bypassService != null) bypassService.close();
-        if (botServer != null) botServer.stop();
+        if (botServer != null) botServer.stopServer();
     }
 
     private void registerCommands(FoliaBanCommands banCommands, FoliaAdminCommands adminCommands) {

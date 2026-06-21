@@ -84,6 +84,13 @@ bot:
   max_per_qq: 3
   allowed_id_chars: "a-zA-Z0-9_-"
   max_id_length: 16
+  status_trigger: "服务器还活着吗"
+  rate_limit_max: 3
+  rate_limit_window: 60
+  mc_host: 127.0.0.1
+  mc_port: 25565
+  mc_display_name: "LuoOS服务器"
+  mc_description: "欢迎来到LuoOS"
 
 # =============================================================================
 # TPS Display / TPS 显示
