@@ -80,6 +80,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             case "whitelist" -> whitelist(sender, args);
             case "migrate", "confirm-click" -> migrationCommands.onHeosSubcommand(sender, args);
             case "migrate-authme" -> migrateAuthMe(sender, args);
+            case "migrate-authme-tsv" -> migrateAuthMeTsv(sender, args);
             case "reload" -> reload(sender, args);
             case "ban", "ban-ip", "unban", "unban-ip", "banlist" -> banCommands.onSubcommand(sender, sub, shiftArgs(args));
             default -> { showHelp(sender); yield true; }
@@ -307,7 +308,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             if (sender.hasPermission("luoos.admin")) {
                 subs.add("ban"); subs.add("ban-ip"); subs.add("unban"); subs.add("unban-ip");
                 subs.add("banlist"); subs.add("resetpassword"); subs.add("info");
-                subs.add("whitelist"); subs.add("migrate"); subs.add("migrate-authme"); subs.add("reload");
+                subs.add("whitelist"); subs.add("migrate"); subs.add("migrate-authme"); subs.add("migrate-authme-tsv"); subs.add("reload");
             }
             return filter(subs, args[0]);
         }
@@ -353,6 +354,24 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             sender.sendMessage(ChatColor.GREEN + "迁移完成！共迁移 " + count + " 个账号。");
         } catch (Exception e) {
             sender.sendMessage(ChatColor.RED + "迁移失败: " + e.getMessage());
+        }
+        return true;
+    }
+
+    private boolean migrateAuthMeTsv(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage(ChatColor.RED + "Usage: /los migrate-authme-tsv <tsv-file>");
+            return true;
+        }
+        String path = args[1];
+        sender.sendMessage(ChatColor.YELLOW + "正在从 " + path + " 导入 AuthMe TSV 数据...");
+        try {
+            heos.folia.utils.AuthMeMigrator migrator = new heos.folia.utils.AuthMeMigrator(
+                    java.util.logging.Logger.getLogger("LuoOS-AuthMe"), authService.getStorage());
+            int count = migrator.migrateFromTsv(path);
+            sender.sendMessage(ChatColor.GREEN + "导入完成！共迁移 " + count + " 个账号。");
+        } catch (Exception e) {
+            sender.sendMessage(ChatColor.RED + "导入失败: " + e.getMessage());
         }
         return true;
     }

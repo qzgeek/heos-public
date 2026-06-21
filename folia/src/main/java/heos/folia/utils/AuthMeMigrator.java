@@ -193,4 +193,35 @@ public class AuthMeMigrator {
         }
         return isSqlite ? "\"" + name + "\"" : "`" + name + "`";
     }
+
+    /**
+     * Import from a TSV dump file (username\\tpassword_hash\\tip\\tlastlogin).
+     * Useful when the AuthMe database is not directly accessible.
+     */
+    public int migrateFromTsv(String tsvPath) {
+        int count = 0;
+        logger.info("Migrating from TSV dump: " + tsvPath);
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(new java.io.FileInputStream(tsvPath), java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                String[] parts = line.split("\\t");
+                if (parts.length < 2) continue;
+                String username = parts[0];
+                String authHash = parts[1];
+                String ip = parts.length > 2 ? parts[2] : "";
+                long lastLogin = 0;
+                if (parts.length > 3 && !parts[3].isEmpty()) {
+                    try { lastLogin = Long.parseLong(parts[3]); } catch (NumberFormatException ignored) {}
+                }
+                if (authHash == null || authHash.isEmpty()) continue;
+                if (migrateAccount(username, username, authHash, ip, lastLogin)) count++;
+            }
+        } catch (Exception e) {
+            logger.severe("TSV import failed: " + e.getMessage());
+        }
+        return count;
+    }
 }
