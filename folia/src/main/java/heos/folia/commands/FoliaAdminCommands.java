@@ -49,24 +49,23 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (args.length == 0) {
-            return false;
+            showHelp(sender);
+            return true;
         }
 
         String sub = args[0].toLowerCase();
 
-        // Always-available auth subcommands
         if (sub.equals("login") || sub.equals("register") || sub.equals("changepassword")) {
             return auth(sender, args);
         }
 
-        // Bind commands — available to all players
         if (sub.equals("bind")) {
             return bindCommands.onCommand(sender, command, label, shiftArgs(args));
         }
 
-        // Admin-only subcommands
         if (!sender.hasPermission("luoos.admin")) {
-            sender.sendMessage(ChatColor.RED + "You do not have permission");
+            // Non-admin trying admin command or unknown subcommand — show help
+            showHelp(sender);
             return true;
         }
 
@@ -77,8 +76,25 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             case "migrate", "confirm-click" -> migrationCommands.onHeosSubcommand(sender, args);
             case "reload" -> reload(sender, args);
             case "ban", "ban-ip", "unban", "unban-ip", "banlist" -> banCommands.onSubcommand(sender, sub, shiftArgs(args));
-            default -> false;
+            default -> { showHelp(sender); yield true; }
         };
+    }
+
+    private void showHelp(CommandSender sender) {
+        sender.sendMessage(ChatColor.GOLD + "=== LuoOS v0.06 ===");
+        sender.sendMessage(ChatColor.WHITE + "/los login <密码>" + ChatColor.GRAY + " - 登录");
+        sender.sendMessage(ChatColor.WHITE + "/los register <密码> <确认>" + ChatColor.GRAY + " - 注册");
+        sender.sendMessage(ChatColor.WHITE + "/los changepassword <旧> <新>" + ChatColor.GRAY + " - 改密");
+        sender.sendMessage(ChatColor.WHITE + "/los bind" + ChatColor.GRAY + " - 账号绑定管理");
+        if (sender.hasPermission("luoos.admin")) {
+            sender.sendMessage(ChatColor.GRAY + "--- 管理命令 ---");
+            sender.sendMessage(ChatColor.WHITE + "/los info <玩家>" + ChatColor.GRAY + " - 查看信息");
+            sender.sendMessage(ChatColor.WHITE + "/los resetpassword <玩家> <密码>" + ChatColor.GRAY + " - 重置密码");
+            sender.sendMessage(ChatColor.WHITE + "/los whitelist add/remove/list" + ChatColor.GRAY + " - 白名单");
+            sender.sendMessage(ChatColor.WHITE + "/los migrate <源> <目标>" + ChatColor.GRAY + " - 数据迁移");
+            sender.sendMessage(ChatColor.WHITE + "/los reload" + ChatColor.GRAY + " - 重载配置");
+            sender.sendMessage(ChatColor.WHITE + "/ban /ban-ip /unban /banlist" + ChatColor.GRAY + " - 封禁管理");
+        }
     }
 
     private boolean auth(CommandSender sender, String[] args) {
@@ -90,7 +106,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
         String sub = args[0].toLowerCase();
         if (sub.equals("login")) {
             if (args.length != 2) {
-                sender.sendMessage(ChatColor.RED + "Usage: /heos login <password>");
+                sender.sendMessage(ChatColor.RED + "Usage: /los login <password>");
                 return true;
             }
             authService.login(player, args[1]);
@@ -98,7 +114,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
         }
         if (sub.equals("register")) {
             if (args.length != 3) {
-                sender.sendMessage(ChatColor.RED + "Usage: /heos register <password> <confirmPassword>");
+                sender.sendMessage(ChatColor.RED + "Usage: /los register <password> <confirmPassword>");
                 return true;
             }
             authService.register(player, args[1], args[2]);
@@ -106,7 +122,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
         }
         if (sub.equals("changepassword")) {
             if (args.length != 3) {
-                sender.sendMessage(ChatColor.RED + "Usage: /heos changepassword <oldPassword> <newPassword>");
+                sender.sendMessage(ChatColor.RED + "Usage: /los changepassword <oldPassword> <newPassword>");
                 return true;
             }
             authService.changePassword(player, args[1], args[2]);
@@ -154,7 +170,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
 
     private boolean resetPassword(CommandSender sender, String[] args) {
         if (args.length != 3) {
-            sender.sendMessage(ChatColor.RED + "Usage: /heos resetpassword <player> <newPassword>");
+            sender.sendMessage(ChatColor.RED + "Usage: /los resetpassword <player> <newPassword>");
             return true;
         }
         FoliaPlayerData data = resolvePlayer(args[1], sender);
@@ -182,7 +198,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
 
     private boolean info(CommandSender sender, String[] args) {
         if (args.length != 2) {
-            sender.sendMessage(ChatColor.RED + "Usage: /heos info <player>");
+            sender.sendMessage(ChatColor.RED + "Usage: /los info <player>");
             return true;
         }
         FoliaPlayerData data = resolvePlayer(args[1], sender);
@@ -210,13 +226,13 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
 
     private boolean whitelist(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage(ChatColor.RED + "Usage: /heos whitelist <add|remove|list> [player]");
+            sender.sendMessage(ChatColor.RED + "Usage: /los whitelist <add|remove|list> [player]");
             return true;
         }
         switch (args[1].toLowerCase()) {
             case "add" -> {
                 if (args.length != 3) {
-                    sender.sendMessage(ChatColor.RED + "Usage: /heos whitelist add <player>");
+                    sender.sendMessage(ChatColor.RED + "Usage: /los whitelist add <player>");
                     return true;
                 }
                 // Try resolve to UUID for precise whitelisting
@@ -236,7 +252,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
             }
             case "remove" -> {
                 if (args.length != 3) {
-                    sender.sendMessage(ChatColor.RED + "Usage: /heos whitelist remove <player>");
+                    sender.sendMessage(ChatColor.RED + "Usage: /los whitelist remove <player>");
                     return true;
                 }
                 FoliaPlayerData data = resolvePlayer(args[2], sender);
@@ -316,7 +332,7 @@ public final class FoliaAdminCommands implements CommandExecutor, TabCompleter {
 
     private boolean reload(CommandSender sender, String[] args) {
         if (args.length != 1) {
-            sender.sendMessage(ChatColor.RED + "Usage: /heos reload");
+            sender.sendMessage(ChatColor.RED + "Usage: /los reload");
             return true;
         }
         plugin.reloadConfig();
