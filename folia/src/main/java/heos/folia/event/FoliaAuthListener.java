@@ -124,7 +124,6 @@ public final class FoliaAuthListener implements Listener {
             return;
         }
         if (!event.getPlayer().hasPermission("luoos.admin")) {
-            event.getCommands().remove("los");
             event.getCommands().remove("ban");
             event.getCommands().remove("ban-ip");
             event.getCommands().remove("unban");
